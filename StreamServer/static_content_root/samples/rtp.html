@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>Basin Stream Server</title>
+
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css"
+        integrity="sha384-9aIt2nRpC12Uk9gS9baDl411NQApFmC26EwAOH8WgZl5MYYxFfc+NcPb1dKGj7Sk" crossorigin="anonymous">
+    <style>
+        .hidden {
+            display: none;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/alawmulaw"></script>
+    <script>
+        var ws;
+        var ctx = new (window.AudioContext || window.webkitAudioContext),
+            initial_delay_sec = 0,
+            scheduled_time = 0;
+        document.addEventListener('DOMContentLoaded', () => {
+            let ws
+            let xhr = new XMLHttpRequest();
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState == 4) {
+                    if (xhr.status == 200 || xhr.status == 304) {
+                        let response = JSON.parse(xhr.responseText);
+                        if (response.err) {
+                            console.log(response.err)
+                            return;
+                        }
+                        response.data.forEach(element => {
+                            let item = document.createElement('option')
+                            item.textContent = element.key
+                            item.setAttribute('value', element.key)
+                            document.getElementById('select-stream').appendChild(item)
+                        });
+                        document.getElementById('select-stream').addEventListener('change', (event) => {
+                            console.log(event.target.value)
+                            if (ws) {
+                                ws.close()
+                            }
+                            document.getElementById('textarea-stream').value = "Waiting for new data..."
+                            if (event.target.value == "") {
+                                document.getElementById('stream-row').classList.add('hidden')
+                            } else {
+                                document.getElementById('stream-row').classList.remove('hidden')
+                                ws = new WebSocket('ws://' + location.hostname + ':' + location.port + '/api/websocket/stream?key=' + event.target.value + '&parse=rtp&filter=layer_2,payload')
+                                ws.onopen = ((wsevent) => {
+                                    console.log("onopen:", wsevent)
+                                })
+                                ws.onclose = ((wsevent) => {
+                                    console.log("onclose:", wsevent)
+                                })
+                                ws.onerror = ((wserror) => {
+                                    console.log("onerror:", wserror)
+                                })
+                                ws.onmessage = ((wsevent) => {
+                                    let json = wsevent.data
+                                    document.getElementById('textarea-stream').value = json
+
+                                    let obj = JSON.parse(json)
+                                    let timestamp = obj.timestamp
+                                    let data = obj.data
+
+                                    console.log(data)
+                                    if (data.rtp && data.rtp.payload && event.target.value.includes(data.layer_3.src_addr)) {
+                                        var ab = base64ToArrayBuffer(data.rtp.payload)
+                                        let wav = new Uint8Array(ab);
+                                        let pcm = null;
+                                        if (data.rtp.payload_type == 0) {
+                                            pcm = alawmulaw.mulaw.decode(wav);
+                                        } else if (data.rtp.payload_type == 9) {
+                                            pcm = alawmulaw.alaw.decode(wav);
+                                        }
+                                        if (pcm) {
+                                            let pcm2 = new Float32Array(pcm.length);
+                                            for (let i = 0; i < pcm.length; i++) {
+                                                pcm2[i] = (pcm[i] / 32767)
+                                            }
+                                            playAudioStream(pcm2);
+                                        }
+                                    }
+
+                                })
+                            }
+                        });
+
+                    }
+                }
+            }
+
+            xhr.open('GET', '/api/streams', true)
+            xhr.send()
+
+        });
+
+        function base64ToArrayBuffer(base64) {
+            var binary_string = window.atob(base64);
+            var len = binary_string.length;
+            var bytes = new Uint8Array(len);
+            for (var i = 0; i < len; i++) {
+                bytes[i] = binary_string.charCodeAt(i);
+            }
+            return bytes.buffer;
+        }
+
+        function playAudioStream(audio_f32) {
+            var audio_buf = ctx.createBuffer(1, audio_f32.length, 8000),
+                audio_src = ctx.createBufferSource(),
+                current_time = ctx.currentTime;
+
+            audio_buf.getChannelData(0).set(audio_f32);
+
+            audio_src.buffer = audio_buf;
+            audio_src.connect(ctx.destination);
+
+            if (current_time < scheduled_time) {
+                playChunk(audio_src, scheduled_time);
+                scheduled_time += audio_buf.duration;
+            } else {
+                playChunk(audio_src, current_time);
+                scheduled_time = current_time + audio_buf.duration + initial_delay_sec;
+            }
+        }
+
+        function playChunk(audio_src, scheduled_time) {
+            if (audio_src.start) {
+                audio_src.start(scheduled_time);
+            } else {
+                audio_src.noteOn(scheduled_time);
+            }
+        }
+
+    </script>
+</head>
+
+<body>
+    <div class="container mt-3">
+        <div class="row">
+            <h3>Basin Stream Server</h3>
+        </div>
+        <div class="row">
+            <div class="col-6">
+                <div class="form-group">
+                    <label for="select-stream">Stream:</label>
+                    <select id="select-stream" class="form-control">
+                        <option value="">---</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <div id="stream-row" class="row hidden">
+            <div class="col-12">
+                <div class="form-group">
+                    <label for="select-stream">Latest Data:</label>
+                    <textarea id="textarea-stream" class="form-control" rows="8"></textarea>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>

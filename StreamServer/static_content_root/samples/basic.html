@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>Basin Stream Server</title>
+
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css"
+        integrity="sha384-9aIt2nRpC12Uk9gS9baDl411NQApFmC26EwAOH8WgZl5MYYxFfc+NcPb1dKGj7Sk" crossorigin="anonymous">
+    <style>
+        .hidden {
+            display: none;
+        }
+    </style>
+    <script>
+        var ws;
+        document.addEventListener('DOMContentLoaded', () => {
+            let ws
+            let xhr = new XMLHttpRequest();
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState == 4) {
+                    if (xhr.status == 200 || xhr.status == 304) {
+                        let response = JSON.parse(xhr.responseText);
+                        if (response.err) {
+                            console.log(response.err)
+                            return;
+                        }
+                        response.data.forEach(element => {
+                            let item = document.createElement('option')
+                            item.textContent = element.key
+                            item.setAttribute('value', element.key)
+                            document.getElementById('select-stream').appendChild(item)
+                        });
+                        document.getElementById('select-stream').addEventListener('change', (event) => {
+                            console.log(event.target.value)
+                            if (ws) {
+                                ws.close()
+                            }
+                            document.getElementById('textarea-stream').value = "Waiting for new data..."
+                            if (event.target.value == "") {
+                                document.getElementById('stream-row').classList.add('hidden')
+                            } else {
+                                document.getElementById('stream-row').classList.remove('hidden')
+                                ws = new WebSocket('ws://' + location.hostname + ':' + location.port + '/api/websocket/stream?key=' + event.target.value)
+                                ws.onopen = ((event) => {
+                                    console.log("onopen:", event)
+                                })
+                                ws.onclose = ((event) => {
+                                    console.log("onclose:", event)
+                                })
+                                ws.onerror = ((error) => {
+                                    console.log("onerror:", error)
+                                })
+                                ws.onmessage = ((event) => {
+                                    let json = event.data
+                                    document.getElementById('textarea-stream').value = json
+                                })
+                            }
+                        });
+
+                    }
+                }
+            }
+
+            xhr.open('GET', '/api/streams', true)
+            xhr.send()
+
+        });
+
+    </script>
+</head>
+
+<body>
+    <div class="container mt-3">
+        <div class="row">
+            <h3>Basin Stream Server</h3>
+        </div>
+        <div class="row">
+            <div class="col-6">
+                <div class="form-group">
+                    <label for="select-stream">Stream:</label>
+                    <select id="select-stream" class="form-control">
+                        <option value="">---</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <div id="stream-row" class="row hidden">
+            <div class="col-12">
+                <div class="form-group">
+                    <label for="select-stream">Latest Data:</label>
+                    <textarea id="textarea-stream" class="form-control" rows="8"></textarea>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>
