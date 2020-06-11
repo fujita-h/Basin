@@ -1,0 +1,6 @@
+[submodule "Capture/libtins"]
+	path = Capture/libtins
+	url = https://github.com/mfontanini/libtins.git
+[submodule "Capture/redis-cpp"]
+	path = Capture/redis-cpp
+	url = https://github.com/tdv/redis-cpp.git
