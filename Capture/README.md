@@ -1,16 +1,25 @@
 # Basin Capture
 
-## Requirements
+## 必要なソフトウェア
 
 - libpcap-devel
 - openssl-devel
+- make
+- gcc-c++
 - [boost](https://www.boost.org/) >= 1.67.0
 - [CMake](https://cmake.org/) >= 2.12.0
 
 
-## Build Capture
+## ビルド方法
 
 ```Shell
+# Clone repo
+git clone https://github.com/fujita-h/Basin.git
+cd Basin/Capture
+
+# Init and update submodules
+git submodule update -i
+
 # Create build directory
 mkdir build
 cd build/
@@ -23,9 +32,9 @@ make
 ```
 
 
-### How to install CMake from source
+### [Optional] CMake をソースからインストールするには
 
-If your system does not have the required CMake, you can install it from source.
+ディストリビューションによっては、パッケージマネージャの CMake が古く、Capture をビルドできない場合があります。その際は、ソースからインストールして下さい。  
 
 ```Shell
 wget https://github.com/Kitware/CMake/releases/download/v3.17.3/cmake-3.17.3.tar.gz
@@ -36,9 +45,9 @@ make
 make install
 ```
 
-### How to install boost from source
+### [Optional] boost をソースからインストールするには
 
-If your system does not have the required boost, you can install it from source.
+ディストリビューションによっては、パッケージマネージャの boost が古く、Capture をビルドできない場合があります。その際は、ソースからインストールして下さい。  
 
 ```Shell
 wget https://dl.bintray.com/boostorg/release/1.73.0/source/boost_1_73_0.tar.gz
