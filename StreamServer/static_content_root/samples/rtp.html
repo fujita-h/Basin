@@ -63,8 +63,7 @@
                                     let timestamp = obj.timestamp
                                     let data = obj.data
 
-                                    console.log(data)
-                                    if (data.rtp && data.rtp.payload && event.target.value.includes(data.layer_3.src_addr)) {
+                                    if (data.rtp && data.rtp.payload && event.target.value.includes(data.layer_3.dst_addr)) {
                                         var ab = base64ToArrayBuffer(data.rtp.payload)
                                         let wav = new Uint8Array(ab);
                                         let pcm = null;
