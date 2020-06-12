@@ -17,14 +17,6 @@ uint16_t char_to_uint16_le(char *c, int i)
     return (uint16_t)((uint8_t)c[i] | (uint8_t)c[i + 1] << 8);
 }
 
-void send_data()
-{
-    Tins::PacketSender _sender;
-    Tins::NetworkInterface iface("eth0");
-    Tins::IP pkt = Tins::IP("192.168.0.1") / Tins::UDP(2300);
-    _sender.send(pkt, iface);
-}
-
 int main(int argc, char *argv[])
 {
     struct timeval myTime;
