@@ -19,7 +19,7 @@ uint16_t char_to_uint16_le(char *c, int i)
 
 int main(int argc, char *argv[])
 {
-    struct timeval myTime;
+    struct timeval cur_time;
     struct tm *time_st;
 
     cmdline::parser cmdline_parser;
@@ -184,8 +184,16 @@ int main(int argc, char *argv[])
             Tins::PacketSender sender;
             Tins::NetworkInterface iface(cmdline_parser.get<std::string>("interface"));
 
+            long start_sec = 0;
+            long start_usec = 0;
+            long process_time_usec = 0;
+
             while (cnt < data_chunk_size)
             {
+                gettimeofday(&cur_time, NULL);
+                start_sec = (long)(cur_time.tv_sec);
+                start_usec = (long)(cur_time.tv_usec);
+
                 uint16_t read_size = cnt + payload_bytes > data_chunk_size ? data_chunk_size - cnt : payload_bytes;
                 char data_buffer[read_size];
                 ifs.seekg(data_chunk_start_pos + cnt, std::ios::beg);
@@ -220,14 +228,15 @@ int main(int argc, char *argv[])
                 Tins::IP pkt = Tins::IP(cmdline_parser.get<std::string>("destination")) / Tins::UDP(cmdline_parser.get<int>("dport"), cmdline_parser.get<int>("sport")) / Tins::RawPDU(payload);
                 sender.send(pkt, iface);
 
-                gettimeofday(&myTime, NULL);
-                time_st = localtime(&myTime.tv_sec);
-                std::cout << time_st->tm_hour << ":" << time_st->tm_min << ":" << time_st->tm_sec << "." << myTime.tv_usec << " sequence: " << sequence << ", size: " << read_size << std::endl;
+                gettimeofday(&cur_time, NULL);
+                time_st = localtime(&cur_time.tv_sec);
+                process_time_usec = ((long)(cur_time.tv_sec) - start_sec) * 1000000 + ((long)(cur_time.tv_usec) - start_usec);
+                std::cout << time_st->tm_hour << ":" << time_st->tm_min << ":" << time_st->tm_sec << "." << cur_time.tv_usec << " sequence: " << sequence << ", size: " << read_size << ", process_time_usec: " << process_time_usec << std::endl;
 
                 sequence++;
                 timestamp += read_size;
 
-                usleep(payload_time_ms * 980);
+                usleep(payload_time_ms * 1000 - process_time_usec);
             }
         }
         else
