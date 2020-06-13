@@ -16,7 +16,7 @@
     <script>
         var ws;
         var ctx = new (window.AudioContext || window.webkitAudioContext),
-            initial_delay_sec = 0,
+            initial_delay_sec = 0.1,
             scheduled_time = 0;
         document.addEventListener('DOMContentLoaded', () => {
             let ws
