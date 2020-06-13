@@ -1,4 +1,5 @@
 #include <iostream>
+#include <iomanip>
 #include <fstream>
 #include <stdio.h>
 #include <time.h>
@@ -19,9 +20,6 @@ uint16_t char_to_uint16_le(char *c, int i)
 
 int main(int argc, char *argv[])
 {
-    struct timeval cur_time;
-    struct tm *time_st;
-
     cmdline::parser cmdline_parser;
     cmdline_parser.add<std::string>("input-wave-file", 'f', "input wave file name", true, "");
     cmdline_parser.add<uint16_t>("payload-time-ms", 'p', "payload time [ms]", false, 20);
@@ -29,6 +27,7 @@ int main(int argc, char *argv[])
     cmdline_parser.add<std::string>("destination", 'd', "destination ip", false, "192.168.0.1");
     cmdline_parser.add<int>("sport", '\0', "source port", false, 6000);
     cmdline_parser.add<int>("dport", '\0', "destination port", false, 6002);
+    cmdline_parser.add<long>("sleep-adjustment-us", '\0', "sleep adjustment time [us]", false, 0);
     cmdline_parser.parse_check(argc, argv);
 
     std::ifstream ifs(cmdline_parser.get<std::string>("input-wave-file"), std::ios::binary);
@@ -184,9 +183,16 @@ int main(int argc, char *argv[])
             Tins::PacketSender sender;
             Tins::NetworkInterface iface(cmdline_parser.get<std::string>("interface"));
 
+            struct timeval cur_time;
+            struct timeval prev_time
+            {
+                0
+            };
+            struct tm *time_st;
+
             long start_sec = 0;
             long start_usec = 0;
-            long process_time_usec = 0;
+            long delay_sum = 0;
 
             while (cnt < data_chunk_size)
             {
@@ -230,13 +236,25 @@ int main(int argc, char *argv[])
 
                 gettimeofday(&cur_time, NULL);
                 time_st = localtime(&cur_time.tv_sec);
-                process_time_usec = ((long)(cur_time.tv_sec) - start_sec) * 1000000 + ((long)(cur_time.tv_usec) - start_usec);
-                std::cout << time_st->tm_hour << ":" << time_st->tm_min << ":" << time_st->tm_sec << "." << cur_time.tv_usec << " sequence: " << sequence << ", size: " << read_size << ", process_time_usec: " << process_time_usec << std::endl;
+                long process_time_usec = ((long)(cur_time.tv_sec) - start_sec) * 1000000 + ((long)(cur_time.tv_usec) - start_usec);
+                long measured_payload_interval_us = (prev_time.tv_sec == 0) ? (long)payload_time_ms * (long)1000 : ((long)(cur_time.tv_sec) - (long)(prev_time.tv_sec)) * 1000000 + ((long)(cur_time.tv_usec) - (long)(prev_time.tv_usec));
+                long send_delay_us = measured_payload_interval_us - (long)(payload_time_ms * 1000);
+                std::cout << std::setfill('0') << std::right << std::setw(2) << time_st->tm_hour;
+                std::cout << ":" << std::setfill('0') << std::right << std::setw(2) << time_st->tm_min;
+                std::cout << ":" << std::setfill('0') << std::right << std::setw(2) << time_st->tm_sec;
+                std::cout << "." << std::setfill('0') << std::right << std::setw(6) << cur_time.tv_usec;
+                std::cout << std::setfill(' ');
+                std::cout << " seq: " << std::right << std::setw(4) << sequence;
+                std::cout << ", size: " << std::right << std::setw(3) << read_size;
+                std::cout << ", delay: " << std::right << std::setw(4) << send_delay_us;
+                std::cout << ", delay total: " << delay_sum << std::endl;
+                delay_sum += send_delay_us;
+                prev_time = cur_time;
 
                 sequence++;
                 timestamp += read_size;
 
-                usleep(payload_time_ms * 1000 - process_time_usec);
+                usleep(payload_time_ms * 1000 - process_time_usec + cmdline_parser.get<long>("sleep-adjustment-us"));
             }
         }
         else
