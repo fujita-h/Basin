@@ -45,7 +45,7 @@
                                 document.getElementById('stream-row').classList.add('hidden')
                             } else {
                                 document.getElementById('stream-row').classList.remove('hidden')
-                                ws = new WebSocket('ws://' + location.hostname + ':' + location.port + '/api/websocket/stream?key=' + event.target.value + '&parse=rtp&filter=layer_2,payload')
+                                ws = new WebSocket('ws://' + location.hostname + ':' + location.port + '/api/websocket/stream?key=' + event.target.value + '&parse=rtp,google-realtime-text&filter=layer_2,payload')
                                 ws.onopen = ((wsevent) => {
                                     console.log("onopen:", wsevent)
                                 })

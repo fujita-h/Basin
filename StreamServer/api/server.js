@@ -5,8 +5,13 @@ const bodyParser = require('body-parser')
 const Rx = require('rxjs/Rx');
 const RedisStream = require('./redis-stream');
 const WebSocketServer = require('ws').Server
+const Speech = require('@google-cloud/speech').v1p1beta1;
 const debug = require('debug')('streamserver');
 const debug_performance = require('debug')('streamserver:performance')
+const util = require('util');
+
+const FLAG_RTP = 'rtp'
+const FLAG_GOOGLE_REALTIME_TEXT = 'google-realtime-text'
 
 function Server(serverSettings, redisSettings) {
     this.port = serverSettings.port
@@ -66,6 +71,52 @@ Server.prototype.start = function () {
             let parse = queries.parse ? queries.parse.toLowerCase().split(',') : null
             let filter = queries.filter ? queries.filter.toLowerCase().split(',') : null
 
+
+            // Google Speech to Text
+            let speechClient = null;
+            let recognizeStream = null;
+            let flag_end_of_single_utterance = false;
+            let flag_isFinal = false;
+            let voiceCache = [];
+            const speechRequest = {
+                config: {
+                    encoding: "MULAW",
+                    sampleRateHertz: 8000,
+                    languageCode: "ja-JP",
+                    enableAutomaticPunctuation: true,
+                },
+                singleUtterance: true,
+                interimResults: true,
+            };
+            const speechCallback = data => {
+                //console.log(util.inspect(data, false, null))
+                if (data.speechEventType == 'END_OF_SINGLE_UTTERANCE') {
+                    flag_end_of_single_utterance = true;
+                    console.log("flag_end_of_single_utterance <= true")
+                } else if (data.speechEventType == 'SPEECH_EVENT_UNSPECIFIED') {
+                    if (data.results && data.results[0]) {
+                        if (data.results[0].isFinal == true) {
+                            console.log("flag_isFinal <= true")
+                            flag_isFinal = true;
+                        }
+                        console.log(data.results[0].alternatives[0].transcript);
+                    }
+                }
+
+                if (flag_end_of_single_utterance && flag_isFinal) {
+                    console.log("recognizeStream is finished. closing.")
+                    flag_end_of_single_utterance = false;
+                    flag_isFinal = false;
+                    recognizeStream.removeListener('data', speechCallback);
+                    recognizeStream = null;
+                }
+
+            };
+            if (parse && parse.includes(FLAG_GOOGLE_REALTIME_TEXT)) {
+                speechClient = new Speech.SpeechClient();
+            }
+
+
             if (!key) {
                 websocket.close()
             } else {
@@ -89,8 +140,8 @@ Server.prototype.start = function () {
                     for (let i = 0; i < Math.floor(dataArray.length / 2); i++) {
                         let k = dataArray[i * 2]
                         let v = dataArray[i * 2 + 1]
-                        
-                        if(k.endsWith('size') || k.endsWith('port')) {
+
+                        if (k.endsWith('size') || k.endsWith('port')) {
                             v = Number(v)
                         }
 
@@ -108,8 +159,11 @@ Server.prototype.start = function () {
                     }
 
                     //debug(data)
-
-                    if (parse && parse.includes('rtp') && data.payload.type == 'UDP' && data.payload && data.payload.size > 0) {
+                    if (parse && parse.includes(FLAG_GOOGLE_REALTIME_TEXT)) {
+                        parse[FLAG_RTP] = 1;
+                    }
+                    
+                    if (parse && parse.includes(FLAG_RTP) && data.payload.type == 'UDP' && data.payload && data.payload.size > 0) {
                         let rtp_valid = true
                         let buffer = null;
                         let rtp = {}
@@ -186,8 +240,9 @@ Server.prototype.start = function () {
                         }
 
                         // check payload
+                        let rtp_payload = null;
                         if (rtp_valid && buffer && buffer.length > rtp.header_length) {
-                            let rtp_payload = buffer.slice(rtp.header_length)
+                            rtp_payload = buffer.slice(rtp.header_length)
                             if (rtp.payload_encoding_type == "base64") {
                                 rtp.payload = rtp_payload.toString("base64")
                             } else if (rtp.payload_encoding_type == "hex") {
@@ -201,14 +256,37 @@ Server.prototype.start = function () {
 
                         if (rtp_valid) {
                             data.rtp = rtp
+                            if (parse.includes(FLAG_GOOGLE_REALTIME_TEXT)) {
+                                if (!recognizeStream) {
+                                    console.log("recognizeStream is null. create new one.")
+                                    recognizeStream = speechClient
+                                        .streamingRecognize(speechRequest)
+                                        .on('error', err => {
+                                            console.error(err)
+                                        })
+                                        .on('data', speechCallback);
+                                }
+
+                                if (rtp_payload) {
+                                    if (flag_end_of_single_utterance) {
+                                        voiceCache.push(rtp_payload)
+                                    } else {
+                                        while ((x = voiceCache.shift()) != undefined) {
+                                            recognizeStream.write(x);
+                                        }
+                                        recognizeStream.write(rtp_payload);
+
+                                    }
+                                }
+                            }
                         }
 
                     }  // end of parse_rtp
 
                     // filter
-                    if(filter) {
+                    if (filter) {
                         filter.forEach(x => {
-                            if(data[x]) {
+                            if (data[x]) {
                                 delete data[x];
                             }
                         });
