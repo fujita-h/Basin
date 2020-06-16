@@ -5,10 +5,9 @@ const bodyParser = require('body-parser')
 const Rx = require('rxjs/Rx');
 const RedisStream = require('./redis-stream');
 const WebSocketServer = require('ws').Server
-const Speech = require('@google-cloud/speech').v1p1beta1;
 const debug = require('debug')('streamserver');
 const debug_performance = require('debug')('streamserver:performance')
-const util = require('util');
+const GoogleSpeech = require('./google-speech')
 
 const FLAG_RTP = 'rtp'
 const FLAG_GOOGLE_REALTIME_TEXT = 'google-realtime-text'
@@ -20,9 +19,7 @@ function Server(serverSettings, redisSettings) {
     this.server = null
     this.webConnections = []
     this.websocketConnections = []
-
     this.stream = new RedisStream(redisSettings.host, redisSettings.port, redisSettings.db);
-
 }
 
 Server.prototype.start = function () {
@@ -51,8 +48,8 @@ Server.prototype.start = function () {
         .filter(event => event)
         .flatMap(event => {
 
-            websocket = event[0]
-            request = event[1]
+            let websocket = event[0]
+            let request = event[1]
 
             const disconnect$ = Rx.Observable.fromEvent(websocket, 'close')
                 .do(() => {
@@ -73,49 +70,27 @@ Server.prototype.start = function () {
 
 
             // Google Speech to Text
-            let speechClient = null;
-            let recognizeStream = null;
-            let flag_end_of_single_utterance = false;
-            let flag_isFinal = false;
-            let voiceCache = [];
-            const speechRequest = {
-                config: {
-                    encoding: "MULAW",
-                    sampleRateHertz: 8000,
-                    languageCode: "ja-JP",
-                    enableAutomaticPunctuation: true,
-                },
-                singleUtterance: true,
-                interimResults: true,
+            let googleSpeech_in = null;
+            let googleSpeech_out = null;
+            let speechCallback_in = stream => {
+                let data = {};
+                data.speech_to_text = {};
+                data.speech_to_text.google_speech_response = stream;
+                data.speech_to_text.destination = "in"
+                websocket.send(JSON.stringify({ timestamp: Date.now().toString(), data: data }));
             };
-            const speechCallback = data => {
-                //console.log(util.inspect(data, false, null))
-                if (data.speechEventType == 'END_OF_SINGLE_UTTERANCE') {
-                    flag_end_of_single_utterance = true;
-                    console.log("flag_end_of_single_utterance <= true")
-                } else if (data.speechEventType == 'SPEECH_EVENT_UNSPECIFIED') {
-                    if (data.results && data.results[0]) {
-                        if (data.results[0].isFinal == true) {
-                            console.log("flag_isFinal <= true")
-                            flag_isFinal = true;
-                        }
-                        console.log(data.results[0].alternatives[0].transcript);
-                    }
-                }
-
-                if (flag_end_of_single_utterance && flag_isFinal) {
-                    console.log("recognizeStream is finished. closing.")
-                    flag_end_of_single_utterance = false;
-                    flag_isFinal = false;
-                    recognizeStream.removeListener('data', speechCallback);
-                    recognizeStream = null;
-                }
-
+            let speechCallback_out = stream => {
+                let data = {};
+                data.speech_to_text = {};
+                data.speech_to_text.google_speech_response = stream;
+                data.speech_to_text.destination = "out"
+                websocket.send(JSON.stringify({ timestamp: Date.now().toString(), data: data }));
             };
+
             if (parse && parse.includes(FLAG_GOOGLE_REALTIME_TEXT)) {
-                speechClient = new Speech.SpeechClient();
+                googleSpeech_in = new GoogleSpeech(speechCallback_in)
+                googleSpeech_out = new GoogleSpeech(speechCallback_out)
             }
-
 
             if (!key) {
                 websocket.close()
@@ -162,7 +137,7 @@ Server.prototype.start = function () {
                     if (parse && parse.includes(FLAG_GOOGLE_REALTIME_TEXT)) {
                         parse[FLAG_RTP] = 1;
                     }
-                    
+
                     if (parse && parse.includes(FLAG_RTP) && data.payload.type == 'UDP' && data.payload && data.payload.size > 0) {
                         let rtp_valid = true
                         let buffer = null;
@@ -256,31 +231,14 @@ Server.prototype.start = function () {
 
                         if (rtp_valid) {
                             data.rtp = rtp
-                            if (parse.includes(FLAG_GOOGLE_REALTIME_TEXT)) {
-                                if (!recognizeStream) {
-                                    console.log("recognizeStream is null. create new one.")
-                                    recognizeStream = speechClient
-                                        .streamingRecognize(speechRequest)
-                                        .on('error', err => {
-                                            console.error(err)
-                                        })
-                                        .on('data', speechCallback);
-                                }
-
-                                if (rtp_payload) {
-                                    if (flag_end_of_single_utterance) {
-                                        voiceCache.push(rtp_payload)
-                                    } else {
-                                        while ((x = voiceCache.shift()) != undefined) {
-                                            recognizeStream.write(x);
-                                        }
-                                        recognizeStream.write(rtp_payload);
-
-                                    }
+                            if (parse && parse.includes(FLAG_GOOGLE_REALTIME_TEXT)) {
+                                if (key && key.includes(data.layer_3.dst_addr)) {
+                                    googleSpeech_in.sendChunk(rtp_payload);
+                                } else if (key && key.includes(data.layer_3.src_addr)) {
+                                    googleSpeech_out.sendChunk(rtp_payload);
                                 }
                             }
                         }
-
                     }  // end of parse_rtp
 
                     // filter
@@ -291,7 +249,6 @@ Server.prototype.start = function () {
                             }
                         });
                     }
-
                     // send message
                     websocket.send(JSON.stringify({ timestamp: timestamp, data: data }));
                 })

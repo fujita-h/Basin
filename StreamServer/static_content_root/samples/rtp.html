@@ -79,7 +79,24 @@
                                             }
                                             playAudioStream(pcm2);
                                         }
+                                    } else if (data.speech_to_text) {
+                                        console.log(data.speech_to_text)
+                                        if (data.speech_to_text.google_speech_response &&
+                                            data.speech_to_text.google_speech_response.speechEventType == "SPEECH_EVENT_UNSPECIFIED") {
+                                            let gresponse = data.speech_to_text.google_speech_response;
+                                            if (gresponse.results && gresponse.results[0]) {
+                                                if (gresponse.results[0].isFinal) {
+                                                    document.getElementById('textarea-text').value =
+                                                        document.getElementById('textarea-text').value + gresponse.results[0].alternatives[0].transcript + "\n"
+                                                    document.getElementById('textarea-pending-text').value = ""
+                                                } else {
+                                                    document.getElementById('textarea-pending-text').value = gresponse.results[0].alternatives[0].transcript
+                                                }
+                                            }
+                                        }
                                     }
+
+
 
                                 })
                             }
@@ -156,6 +173,12 @@
                     <label for="select-stream">Latest Data:</label>
                     <textarea id="textarea-stream" class="form-control" rows="8"></textarea>
                 </div>
+                <div class="form-group">
+                    <label for="select-text">Text-To-Speech:</label>
+                    <textarea id="textarea-text" class="form-control" rows="8"></textarea>
+                    <textarea id="textarea-pending-text" class="form-control" rows="2"></textarea>
+                </div>
+
             </div>
         </div>
     </div>
