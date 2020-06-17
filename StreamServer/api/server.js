@@ -15,7 +15,7 @@ function Server(serverSettings, redisSettings) {
     this.server = null
     this.webConnections = []
     this.websocketConnections = []
-    this.streamManager = new StreamManager(true, true)
+    this.streamManager = new StreamManager(redisSettings, true, true)
 }
 
 Server.prototype.start = function () {

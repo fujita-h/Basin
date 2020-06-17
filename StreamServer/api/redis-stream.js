@@ -7,12 +7,10 @@ function RedisStream(redis_hostname, redis_port, redis_database) {
         host: redis_hostname,
         db: redis_database
     }
+
 }
 
-//let redis = new Redis()
-// redis = new Redis(address);
-// redis = new Redis.Cluster(addresses);
-
+// キャッシュ
 const cache = {}
 
 RedisStream.prototype.observeNewRedisStreamEvent = function observeNewRedisStreamEvent(key) {

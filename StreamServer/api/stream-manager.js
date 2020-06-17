@@ -6,36 +6,44 @@ const EVENT_TYPE_NETWPRK_PACKET = 'NETWORK_PACKET'
 const EVENT_TYPE_GOOGLE_SPEECH_IN = 'GOOGLE_SPEECH_IN'
 const EVENT_TYPE_GOOGLE_SPEECH_OUT = 'GOOGLE_SPEECH_IN'
 
-function StreamManager(enableParseRTP = false, enableGoogleSpeech = false) {
+function StreamManager(redisSettings, enableParseRTP = false, enableGoogleSpeech = false) {
     this.enableParseRTP = enableParseRTP
     this.enableGoogleSpeech = enableGoogleSpeech
+    
+    // Redis へ接続
+    this.redisStream = new RedisStream(redisSettings.host, redisSettings.port, redisSettings.db);
 
+    // Google Speech to Text を IN/OUT の2チャンネル分用意
     this.googleSpeech_IN = enableGoogleSpeech ? new GoogleSpeech() : null;
     this.googleSpeech_OUT = enableGoogleSpeech ? new GoogleSpeech() : null;
-    this.stream = new RedisStream("127.0.0.1", 6379, 0);
+
+    // キャッシュ
+    this.cache = {}
 }
 
-const cache = {}
 
 StreamManager.prototype.observeAllStream = function (key) {
     // すでに作成済の Obervable に対するリクエストだったら、作ったものを返す。
-    if (cache[key]) return cache[key]
-    console.log(key)
-    return cache[key] = Rx.Observable.of(null)
+    if (this.cache[key]) return this.cache[key]
+
+    return this.cache[key] = Rx.Observable.of(null)
+        // ネットワークパケットのストリームをマージ
         .merge(this.observeNetworkPacketStream(key))
+        // Google Speech の結果ストリームをマージ
         .merge(this.observeGoogleSpeechStream())
-        .filter(message => message)
+        .filter(message => message) // null 除去
         .finally(() => {
-            delete cache[key]
+            delete this.cache[key]
         })
-        .publish()
-        .refCount()
+        .publish() // Hot Observable 化
+        .refCount() // 最初の subscriber が現れたら放流開始、subscriber が誰もいなくなったら放流停止
 
 }
 
 StreamManager.prototype.observeNetworkPacketStream = function (key) {
-    return this.stream.observeNewRedisStreamEvent(key)
-        .filter(message => message)
+    // Redis Stream から新規データを読み取り、パースする一連の処理
+    return this.redisStream.observeNewRedisStreamEvent(key)
+        .filter(message => message) // null 除去
         .map(message => {
             // message のフォーマットは Redis Stream に準ずる
             // [ key, [ filed_1, string_1, field_2, string_2, ... ] ]
@@ -88,12 +96,12 @@ StreamManager.prototype.observeNetworkPacketStream = function (key) {
 
             // 必要な条件を満たした場合のみ、RTPパースを実行する
             if (this.enableParseRTP == true && data.payload && data.payload.type == 'UDP' && data.payload.size > 0) {
-                let rtp_valid = true
+                let valid_rtp = true
                 let buffer = null;
                 let rtp = {}
                 rtp.header_length = 12;
 
-                // convert payload to Buffer
+                // エンコードされた payload を Buffer に戻す
                 if (data.payload.encoding_type == 'base64') {
                     rtp.payload_encoding_type = 'base64'
                     buffer = Buffer.from(data.payload.payload, 'base64')
@@ -104,8 +112,8 @@ StreamManager.prototype.observeNetworkPacketStream = function (key) {
                     rtp.payload_encoding_type = 'base64'
                 }
 
-                // Check Basic Header
-                if (rtp_valid && buffer && buffer.length >= rtp.header_length) {
+                // RTP の基本ヘッダー情報を取得する
+                if (valid_rtp && buffer && buffer.length >= rtp.header_length) {
                     rtp.version = buffer[0] >> 6
                     if (rtp.version == 2) {
                         rtp.padding = (buffer[0] & 0b00100000) >> 5
@@ -117,54 +125,56 @@ StreamManager.prototype.observeNetworkPacketStream = function (key) {
                         rtp.timestamp = (((((buffer[4] << 8) | buffer[5]) << 8) | buffer[6]) << 8 | buffer[7]) >>> 0
                         rtp.ssrc = (((((buffer[8] << 8) | buffer[9]) << 8) | buffer[10]) << 8 | buffer[11]) >>> 0
                     } else {
-                        rtp_valid = false
+                        valid_rtp = false
                     }
                 } else {
-                    rtp_valid = false
+                    valid_rtp = false
                 }
 
-                // check CSRC Header
+                // CSRCヘッダーがあれば、payload をエンコードする
                 if (rtp.csrc_count > 0) {
-                    if (rtp_valid && buffer && buffer.length >= rtp.header_length + 4 * rtp.csrc_count) {
+                    if (valid_rtp && buffer && buffer.length >= rtp.header_length + 4 * rtp.csrc_count) {
                         let csrc_payload = buffer.slice(rtp.header_length, rtp.header_length + 4 * rtp.csrc_count)
                         if (rtp.payload_encoding_type == "base64") {
                             rtp.csrc_payload = csrc_payload.toString("base64")
                         } else if (rtp.payload_encoding_type == "hex") {
                             rtp.csrc_payload = csrc_payload.toString("hex")
                         }
+                        // ヘッダ長を CSRC のデータ長だけ増やす
                         rtp.header_length = rtp.header_length + 4 * rtp.csrc_count;
                     }
                     else {
-                        rtp_valid = false
+                        valid_rtp = false
                     }
                 }
 
-                // check Extension
+                // RTP 拡張ヘッダの確認
                 if (rtp.extension == 1) {
-                    // check Extension Header ID/Length
-                    if (rtp_valid && buffer && buffer.length >= rtp.header_length + 4) {
+                    // 拡張ヘッダIDとデータ長の確認
+                    if (valid_rtp && buffer && buffer.length >= rtp.header_length + 4) {
                         rtp.extension_header_id = ((buffer[rtp.header_length] << 8) | buffer[rtp.header_length + 1]) >>> 0
                         rtp.extension_header_length = ((buffer[rtp.header_length + 2] << 8) | buffer[rtp.header_length + 3]) >>> 0
                     } else {
-                        rtp_valid = false
+                        valid_rtp = false
                     }
 
-                    // check Extension Header
-                    if (rtp_valid && buffer && rtp.extension_header_length > 0 && buffer.length >= rtp.header_length + rtp.extension_header_length) {
+                    // 拡張ヘッダがあれば、payload をエンコードする
+                    if (valid_rtp && buffer && rtp.extension_header_length > 0 && buffer.length >= rtp.header_length + rtp.extension_header_length) {
                         let extension_header_payload = buffer.slice(rtp.header_length, rtp.header_length + rtp.extension_header_length)
                         if (rtp.payload_encoding_type == "base64") {
                             rtp.extension_header_payload = extension_header_payload.toString("base64")
                         } else if (rtp.payload_encoding_type == "hex") {
                             rtp.extension_header_payload = extension_header_payload.toString("hex")
                         }
+                        // ヘッダ長を拡張ヘッダのデータ長だけ増やす
                         rtp.header_length = rtp.header_length + rtp.extension_header_length;
                     } else {
-                        rtp_valid = false
+                        valid_rtp = false
                     }
                 }
 
-                // check payload
-                if (rtp_valid && buffer && buffer.length > rtp.header_length) {
+                // RTP payload をエンコードする
+                if (valid_rtp && buffer && buffer.length > rtp.header_length) {
                     rtp_payload = buffer.slice(rtp.header_length)
                     if (rtp.payload_encoding_type == "base64") {
                         rtp.payload = rtp_payload.toString("base64")
@@ -174,19 +184,22 @@ StreamManager.prototype.observeNetworkPacketStream = function (key) {
                     rtp.payload_length = rtp_payload.length
                 }
                 else {
-                    rtp_valid = false
+                    valid_rtp = false
                 }
 
-                if (rtp_valid) {
+                // 有効な RTP であれば、RTP のパース結果を追加する
+                if (valid_rtp) {
                     data.rtp = rtp
                 }
-            }  // end of parse_rtp
+            }  // RTP パース部の終了
 
+            // rtp ペイロードを追加して次へ流す
             return { eventType, timestamp, data, rtp_payload }
         })
         .do(message => {
             // Google Speech to Text に RTP ペイロードを送る
             if (this.enableGoogleSpeech && message.rtp_payload && message.data && message.data.layer_3) {
+                // IN/OUT の向きを確認して、それぞれの Google Speech へ投げる
                 if (this.googleSpeech_IN && message.data.layer_3.dst_addr && key.includes(message.data.layer_3.dst_addr)) {
                     this.googleSpeech_IN.sendChunk(message.rtp_payload)
                 } else if (this.googleSpeech_OUT && message.data.layer_3.src_addr && key.includes(message.data.layer_3.src_addr)) {
@@ -205,27 +218,33 @@ StreamManager.prototype.observeNetworkPacketStream = function (key) {
 
 
 StreamManager.prototype.observeGoogleSpeechStream = function () {
+    // Google Speech が有効な場合
     if (this.googleSpeech_IN && this.googleSpeech_OUT) {
         return Rx.Observable.of(null)
+            // IN 向きのテキスト化結果をマージ
             .merge(Rx.Observable.fromEvent(this.googleSpeech_IN, "data")
                 .filter(message => message)
                 .map(message => {
+                    // オブジェクト整形
                     let eventType = EVENT_TYPE_GOOGLE_SPEECH_IN
                     let timestamp = Date.now().toString()
                     let data = message
                     return { eventType, timestamp, data }
                 }))
+            // OUT 向きのテキスト化結果をマージ
             .merge(Rx.Observable.fromEvent(this.googleSpeech_OUT, "data")
                 .filter(message => message)
                 .map(message => {
+                    // オブジェクト整形
                     let eventType = EVENT_TYPE_GOOGLE_SPEECH_OUT
                     let timestamp = Date.now().toString()
                     let data = message
                     return { eventType, timestamp, data }
                 }))
-            .filter(message => message)
+            .filter(message => message) // null 除去
 
     } else {
+        // Google Speech が無効だったら空の Observable を渡す
         return Rx.Observable.of(null)
     }
 }
