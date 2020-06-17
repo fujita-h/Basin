@@ -1,3 +1,5 @@
+const util = require("util");
+const EventEmitter = require("events").EventEmitter;
 const Speech = require('@google-cloud/speech').v1p1beta1;
 const mulaw = require('alawmulaw').mulaw;
 
@@ -14,44 +16,28 @@ const speechRequest = {
     interimResults: true,
 };
 
-function GoogleSpeech(speechCallback) {
-    this.speechCallbacks = [];
+function GoogleSpeech() {
     this.speechClient = null
     this.recognizeStream = null
     this.voiceCache = []
     this.silence_counter = 0
-    this.speechCallbacks.push(speechCallback);
     this.speechClient = new Speech.SpeechClient();
 }
 
-GoogleSpeech.prototype.registerCallback = function xxx(speechCallback) {
-    this.speechCallbacks.push(speechCallback)
-    if (this.recognizeStream) {
-        this.recognizeStream.on('data', speechCallback)
-    }
-}
 
-GoogleSpeech.prototype.unregisterCallback = function xxx(speechCallback) {
-    this.speechCallbacks.splice(this.speechCallbacks.indexOf(speechCallback), 1)
-    if (this.recognizeStream) {
-        this.recognizeStream.removeListener('data', speechCallback);
-    }
-}
-
-GoogleSpeech.prototype.sendChunk = function sendChunk(rtp_payload) {
+GoogleSpeech.prototype.sendChunk = function (rtp_payload) {
     if (!this.recognizeStream || !this.recognizeStream.writable || this.recognizeStream.destroyed) {
         console.log(Date.now(), "recognizeStream is null, ended or destroyed. create new one.")
         this.recognizeStream = this.speechClient
             .streamingRecognize(speechRequest)
             .on('error', err => {
                 console.log(err.message)
-                //this.recognizeStream.removeListener('data', this.speechCallback);
-                this.recognizeStream.removeAllListeners('data');
+                //this.emit('err', err.message) // 'error' にすると ERR_UNHANDLED_ERROR が出る
                 this.recognizeStream.destroy()
             })
-        this.speechCallbacks.forEach(cb => {
-            this.recognizeStream.on('data', cb);
-        });
+            .on('data', data => {
+                this.emit('data', data)
+            })
     }
 
     if (rtp_payload) {
@@ -73,25 +59,24 @@ GoogleSpeech.prototype.sendChunk = function sendChunk(rtp_payload) {
         //console.log(voice_min, voice_max, voice_avg, voice_med, silence_counter)
 
         if (!this.recognizeStream.writable || this.recognizeStream.destroyed) {
-            console.log("push")
             this.voiceCache.push(rtp_payload)
         } else {
-            while ((x = this.voiceCache.shift()) != undefined) {
-                console.log("pop")
-                this.recognizeStream.write(x);
+            let cache;
+            while ((cache = this.voiceCache.shift()) != undefined) {
+                this.recognizeStream.write(cache);
             }
             if (this.silence_counter == SILENCE_COUNT_THRESHOLD) {
                 this.recognizeStream.end()
             } else {
                 this.recognizeStream.write(rtp_payload);
             }
-
         }
     }
-
-
-
 }
+
+
+util.inherits(GoogleSpeech, EventEmitter)
+module.exports = GoogleSpeech;
 
 
 var sum = function (arr, fn) {
@@ -116,7 +101,3 @@ var median = function (arr, fn) {
     }
     return (temp[half - 1] + temp[half]) / 2;
 };
-
-
-
-module.exports = GoogleSpeech;
