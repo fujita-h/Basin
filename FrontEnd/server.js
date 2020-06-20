@@ -27,7 +27,7 @@ Server.prototype.start = function () {
     app.use('/api', require('./router-api'));
 
     // Static Content
-    app.use('/', express.static(path.join(process.cwd(), '../static_content_root')))
+    app.use('/', express.static(path.join(process.cwd(), './content_root')))
 
     // Start Web Server
     this.server = app.listen(this.port)
