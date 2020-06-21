@@ -14,13 +14,83 @@
     </style>
     <script src="https://cdn.jsdelivr.net/npm/alawmulaw"></script>
     <script>
-        var ws;
-        var ctx = new (window.AudioContext || window.webkitAudioContext),
-            initial_delay_sec = 0.1,
-            scheduled_time = 0;
+
+
+        class PlayRtp {
+            constructor(codec, frequency) {
+                this.codec = codec
+                this.frequency = frequency
+                this.ctx = new (window.AudioContext || window.webkitAudioContext)
+                this.initial_delay_sec = 0.125
+                this.scheduled_time = 0
+            }
+
+            playFromBase64(payload) {
+                let uint8Array = new Uint8Array(this.base64ToArrayBuffer(payload));
+                let raw = null;
+                if (this.codec == 0) {
+                    raw = alawmulaw.mulaw.decode(uint8Array);
+                } else if (this.codec == 9) {
+                    raw = alawmulaw.alaw.decode(uint8Array);
+                }
+                this.play(raw)
+            }
+
+
+            play(raw) {
+                if (raw) {
+                    let raw2 = new Float32Array(raw.length);
+                    for (let i = 0; i < raw.length; i++) {
+                        raw2[i] = (raw[i] / 32767)
+                    }
+                    this.playAudioStream(raw2);
+                }
+            }
+
+            base64ToArrayBuffer(base64) {
+                var binary_string = window.atob(base64);
+                var len = binary_string.length;
+                var bytes = new Uint8Array(len);
+                for (var i = 0; i < len; i++) {
+                    bytes[i] = binary_string.charCodeAt(i);
+                }
+                return bytes.buffer;
+            }
+
+            playAudioStream(audio_f32) {
+                var audio_buf = this.ctx.createBuffer(1, audio_f32.length, this.frequency),
+                    audio_src = this.ctx.createBufferSource(),
+                    current_time = this.ctx.currentTime;
+
+                audio_buf.getChannelData(0).set(audio_f32);
+
+                audio_src.buffer = audio_buf;
+                audio_src.connect(this.ctx.destination);
+
+                if (current_time < this.scheduled_time) {
+                    this.playChunk(audio_src, this.scheduled_time);
+                    this.scheduled_time += audio_buf.duration;
+                } else {
+                    this.playChunk(audio_src, current_time);
+                    this.scheduled_time = current_time + audio_buf.duration + this.initial_delay_sec;
+                }
+            }
+
+            playChunk(audio_src, scheduled_time) {
+                if (audio_src.start) {
+                    audio_src.start(scheduled_time);
+                } else {
+                    audio_src.noteOn(scheduled_time);
+                }
+            }
+        }
+    </script>
+    <script>
         document.addEventListener('DOMContentLoaded', () => {
             let ws
             let xhr = new XMLHttpRequest();
+            let player_1 = new PlayRtp(0, 8000); // mulaw, 8000Hz
+            let player_2 = new PlayRtp(0, 8000); // mulaw, 8000Hz
             xhr.onreadystatechange = function () {
                 if (xhr.readyState == 4) {
                     if (xhr.status == 200 || xhr.status == 304) {
@@ -42,9 +112,9 @@
                             }
                             document.getElementById('textarea-stream').value = "Waiting for new data..."
                             if (event.target.value == "") {
-                                document.getElementById('stream-row').classList.add('hidden')
+                                [].forEach.call(document.getElementsByClassName('stream-row'), (element) => element.classList.add('hidden'))
                             } else {
-                                document.getElementById('stream-row').classList.remove('hidden')
+                                [].forEach.call(document.getElementsByClassName('stream-row'), (element) => element.classList.remove('hidden'))
                                 ws = new WebSocket('ws://' + location.hostname + ':' + location.port + '/api/websocket/stream?key=' + event.target.value + '&parse=rtp,google-realtime-text&filter=layer_2,payload')
                                 ws.onopen = ((wsevent) => {
                                     console.log("onopen:", wsevent)
@@ -61,32 +131,33 @@
 
                                     let obj = JSON.parse(json)
                                     let timestamp = obj.timestamp
+                                    let eventType = obj.eventType
                                     let data = obj.data
                                     if (data.rtp && data.rtp.payload && event.target.value.includes(data.layer_3.dst_addr)) {
-                                        var ab = base64ToArrayBuffer(data.rtp.payload)
-                                        let wav = new Uint8Array(ab);
-                                        let pcm = null;
-                                        if (data.rtp.payload_type == 0) {
-                                            pcm = alawmulaw.mulaw.decode(wav);
-                                        } else if (data.rtp.payload_type == 9) {
-                                            pcm = alawmulaw.alaw.decode(wav);
-                                        }
-                                        if (pcm) {
-                                            let pcm2 = new Float32Array(pcm.length);
-                                            for (let i = 0; i < pcm.length; i++) {
-                                                pcm2[i] = (pcm[i] / 32767)
-                                            }
-                                            playAudioStream(pcm2);
-                                        }
-                                    } else if (data.speechEventType) {
+                                        player_1.playFromBase64(data.rtp.payload);
+                                    } else if (data.rtp && data.rtp.payload && event.target.value.includes(data.layer_3.src_addr)) {
+                                        player_2.playFromBase64(data.rtp.payload);
+                                    } else if (eventType == "GOOGLE_SPEECH_IN" && data.speechEventType) {
                                         if (data.speechEventType == "SPEECH_EVENT_UNSPECIFIED") {
                                             if (data.results && data.results[0]) {
                                                 if (data.results[0].isFinal) {
-                                                    document.getElementById('textarea-text').value =
-                                                        document.getElementById('textarea-text').value + data.results[0].alternatives[0].transcript + "\n"
-                                                    document.getElementById('textarea-pending-text').value = ""
+                                                    document.getElementById('textarea-text-1').value =
+                                                        document.getElementById('textarea-text-1').value + data.results[0].alternatives[0].transcript + "\n"
+                                                    document.getElementById('textarea-pending-text-1').value = ""
                                                 } else {
-                                                    document.getElementById('textarea-pending-text').value = data.results[0].alternatives[0].transcript
+                                                    document.getElementById('textarea-pending-text-1').value = data.results[0].alternatives[0].transcript
+                                                }
+                                            }
+                                        }
+                                    } else if (eventType == "GOOGLE_SPEECH_OUT" && data.speechEventType) {
+                                        if (data.speechEventType == "SPEECH_EVENT_UNSPECIFIED") {
+                                            if (data.results && data.results[0]) {
+                                                if (data.results[0].isFinal) {
+                                                    document.getElementById('textarea-text-2').value =
+                                                        document.getElementById('textarea-text-2').value + data.results[0].alternatives[0].transcript + "\n"
+                                                    document.getElementById('textarea-pending-text-2').value = ""
+                                                } else {
+                                                    document.getElementById('textarea-pending-text-2').value = data.results[0].alternatives[0].transcript
                                                 }
                                             }
                                         }
@@ -104,42 +175,6 @@
 
         });
 
-        function base64ToArrayBuffer(base64) {
-            var binary_string = window.atob(base64);
-            var len = binary_string.length;
-            var bytes = new Uint8Array(len);
-            for (var i = 0; i < len; i++) {
-                bytes[i] = binary_string.charCodeAt(i);
-            }
-            return bytes.buffer;
-        }
-
-        function playAudioStream(audio_f32) {
-            var audio_buf = ctx.createBuffer(1, audio_f32.length, 8000),
-                audio_src = ctx.createBufferSource(),
-                current_time = ctx.currentTime;
-
-            audio_buf.getChannelData(0).set(audio_f32);
-
-            audio_src.buffer = audio_buf;
-            audio_src.connect(ctx.destination);
-
-            if (current_time < scheduled_time) {
-                playChunk(audio_src, scheduled_time);
-                scheduled_time += audio_buf.duration;
-            } else {
-                playChunk(audio_src, current_time);
-                scheduled_time = current_time + audio_buf.duration + initial_delay_sec;
-            }
-        }
-
-        function playChunk(audio_src, scheduled_time) {
-            if (audio_src.start) {
-                audio_src.start(scheduled_time);
-            } else {
-                audio_src.noteOn(scheduled_time);
-            }
-        }
 
     </script>
 </head>
@@ -160,19 +195,36 @@
             </div>
         </div>
 
-        <div id="stream-row" class="row hidden">
+        <div class="row stream-row hidden">
             <div class="col-12">
                 <div class="form-group">
                     <label for="select-stream">Latest Data:</label>
                     <textarea id="textarea-stream" class="form-control" rows="8"></textarea>
                 </div>
+
+            </div>
+        </div>
+        <div class="row stream-row hidden">
+            <div class="col-6">
+
                 <div class="form-group">
-                    <label for="select-text">Speech-to-Text:</label>
-                    <textarea id="textarea-text" class="form-control" rows="8"></textarea>
-                    <textarea id="textarea-pending-text" class="form-control" rows="2"></textarea>
+                    <label for="select-text-1">Speech-to-Text (Other):</label>
+                    <textarea id="textarea-text-1" class="form-control" rows="8"></textarea>
+                    <textarea id="textarea-pending-text-1" class="form-control" rows="2"></textarea>
                 </div>
 
             </div>
+            <div class="col-6">
+
+                <div class="form-group">
+                    <label for="select-text-2">Speech-to-Text (You):</label>
+                    <textarea id="textarea-text-2" class="form-control" rows="8"></textarea>
+                    <textarea id="textarea-pending-text-2" class="form-control" rows="2"></textarea>
+                </div>
+
+            </div>
+
+
         </div>
     </div>
 </body>
