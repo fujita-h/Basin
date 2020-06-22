@@ -14,15 +14,13 @@
     </style>
     <script src="https://cdn.jsdelivr.net/npm/alawmulaw"></script>
     <script>
-
-
         class PlayRtp {
-            constructor(codec, frequency) {
+            constructor(codec, frequency, sourceCount = 1) {
+                this.context = new (window.AudioContext || window.webkitAudioContext)
                 this.codec = codec
                 this.frequency = frequency
-                this.ctx = new (window.AudioContext || window.webkitAudioContext)
                 this.initial_delay_sec = 0.125
-                this.scheduled_time = 0
+                this.scheduled_time = Array(sourceCount).fill(0)
             }
 
             playFromBase64(payload) {
@@ -36,7 +34,6 @@
                 this.play(raw)
             }
 
-
             play(raw) {
                 if (raw) {
                     let raw2 = new Float32Array(raw.length);
@@ -44,6 +41,32 @@
                         raw2[i] = (raw[i] / 32767)
                     }
                     this.playAudioStream(raw2);
+                }
+            }
+
+            playAudioStream(audio_f32, sourceNum = 0) {
+                var audio_buffer = this.context.createBuffer(1, audio_f32.length, this.frequency),
+                    audio_source = this.context.createBufferSource(),
+                    current_time = this.context.currentTime;
+
+                audio_buffer.getChannelData(0).set(audio_f32);
+                audio_source.buffer = audio_buffer;
+                audio_source.connect(this.context.destination);
+
+                if (current_time < this.scheduled_time[sourceNum]) {
+                    this.playChunk(audio_source, this.scheduled_time[sourceNum]);
+                    this.scheduled_time[sourceNum] += audio_buffer.duration;
+                } else {
+                    this.playChunk(audio_source, current_time);
+                    this.scheduled_time[sourceNum] = current_time + audio_buffer.duration + this.initial_delay_sec;
+                }
+            }
+
+            playChunk(source, time) {
+                if (source.start) {
+                    source.start(time);
+                } else {
+                    source.noteOn(time);
                 }
             }
 
@@ -57,40 +80,13 @@
                 return bytes.buffer;
             }
 
-            playAudioStream(audio_f32) {
-                var audio_buf = this.ctx.createBuffer(1, audio_f32.length, this.frequency),
-                    audio_src = this.ctx.createBufferSource(),
-                    current_time = this.ctx.currentTime;
-
-                audio_buf.getChannelData(0).set(audio_f32);
-
-                audio_src.buffer = audio_buf;
-                audio_src.connect(this.ctx.destination);
-
-                if (current_time < this.scheduled_time) {
-                    this.playChunk(audio_src, this.scheduled_time);
-                    this.scheduled_time += audio_buf.duration;
-                } else {
-                    this.playChunk(audio_src, current_time);
-                    this.scheduled_time = current_time + audio_buf.duration + this.initial_delay_sec;
-                }
-            }
-
-            playChunk(audio_src, scheduled_time) {
-                if (audio_src.start) {
-                    audio_src.start(scheduled_time);
-                } else {
-                    audio_src.noteOn(scheduled_time);
-                }
-            }
         }
     </script>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             let ws
             let xhr = new XMLHttpRequest();
-            let player_1 = new PlayRtp(0, 8000); // mulaw, 8000Hz
-            let player_2 = new PlayRtp(0, 8000); // mulaw, 8000Hz
+            let player = new PlayRtp(0, 8000, 2); // mulaw, 8000Hz
             xhr.onreadystatechange = function () {
                 if (xhr.readyState == 4) {
                     if (xhr.status == 200 || xhr.status == 304) {
@@ -134,9 +130,9 @@
                                     let eventType = obj.eventType
                                     let data = obj.data
                                     if (data.rtp && data.rtp.payload && event.target.value.includes(data.layer_3.dst_addr)) {
-                                        player_1.playFromBase64(data.rtp.payload);
+                                        player.playFromBase64(data.rtp.payload, 0);
                                     } else if (data.rtp && data.rtp.payload && event.target.value.includes(data.layer_3.src_addr)) {
-                                        player_2.playFromBase64(data.rtp.payload);
+                                        player.playFromBase64(data.rtp.payload, 1);
                                     } else if (eventType == "GOOGLE_SPEECH_IN" && data.speechEventType) {
                                         if (data.speechEventType == "SPEECH_EVENT_UNSPECIFIED") {
                                             if (data.results && data.results[0]) {
