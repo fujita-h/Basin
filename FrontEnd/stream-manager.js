@@ -4,7 +4,7 @@ const RedisStream = require('./redis-stream');
 
 const EVENT_TYPE_NETWPRK_PACKET = 'NETWORK_PACKET'
 const EVENT_TYPE_GOOGLE_SPEECH_IN = 'GOOGLE_SPEECH_IN'
-const EVENT_TYPE_GOOGLE_SPEECH_OUT = 'GOOGLE_SPEECH_IN'
+const EVENT_TYPE_GOOGLE_SPEECH_OUT = 'GOOGLE_SPEECH_OUT'
 
 function StreamManager(redisSettings, enableParseRTP = false, enableGoogleSpeech = false) {
     this.enableParseRTP = enableParseRTP
