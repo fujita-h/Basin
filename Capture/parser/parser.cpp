@@ -226,6 +226,8 @@ bool Parser::parse(Tins::PDU &pdu)
                 datagram.payload_size = std::to_string(ethernet_p->find_pdu<Tins::RawPDU>()->payload_size());
                 if (_this->config.payload_convert_method == "hex")
                 {
+                    datagram.payload_encoding_type = "hex";
+                    datagram.payload = uint8_vector_to_hex_string(ethernet_p->find_pdu<Tins::RawPDU>()->payload());
                 }
                 else
                 {
